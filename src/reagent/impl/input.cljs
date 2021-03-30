@@ -1,5 +1,6 @@
 (ns reagent.impl.input
-  (:require [reagent.impl.component :as comp]
+  (:require [goog.object :as gobj]
+            [reagent.impl.component :as comp]
             [reagent.impl.batching :as batch]
             [reagent.impl.protocols :as p]))
 
@@ -74,25 +75,31 @@
       (when (not= rendered-value dom-value)
         (input-node-set-value node rendered-value dom-value this {})))))
 
-(defn input-handle-change [^clj this on-change e]
-  (set! (.-cljsDOMValue this) (-> e .-target .-value))
-  ;; Make sure the input is re-rendered, in case on-change
+(defn input-handle-change [^clj this handler e->val e]
+  (set! (.-cljsDOMValue this) (e->val e))
+  ;; Make sure the input is re-rendered, in case handler
   ;; wants to keep the value unchanged
   (when-not (.-cljsInputDirty this)
     (set! (.-cljsInputDirty this) true)
     (batch/do-after-render #(input-component-set-value this)))
-  (on-change e))
+  (handler e))
 
 (defn input-render-setup
   [^clj this ^js jsprops]
   ;; Don't rely on React for updating "controlled inputs", since it
   ;; doesn't play well with async rendering (misses keystrokes).
   (when (and (some? jsprops)
-             (.hasOwnProperty jsprops "onChange")
-             (.hasOwnProperty jsprops "value"))
+          (or (.hasOwnProperty jsprops "onChange")
+            (.hasOwnProperty jsprops "onChangeText"))
+          (.hasOwnProperty jsprops "value"))
     (let [v (.-value jsprops)
           value (if (nil? v) "" v)
-          on-change (.-onChange jsprops)
+          on-change? (.hasOwnProperty jsprops "onChange")
+          handler (or (.-onChangeText jsprops)
+                    (.-onChange jsprops))
+          e->val (if on-change?
+                   (fn [e] (-> e .-target .-value))
+                   identity)
           original-ref-fn (.-ref jsprops)]
       (when-not (.-cljsInputLive this)
         ;; set initial value
@@ -119,7 +126,8 @@
       (set! (.-cljsRenderedValue this) value)
       (js-delete jsprops "value")
       (set! (.-defaultValue jsprops) value)
-      (set! (.-onChange jsprops) #(input-handle-change this on-change %))
+      (gobj/set jsprops (if on-change? "onChange" "onChangeText")
+        #(input-handle-change this handler e->val %))
       (set! (.-ref jsprops) (.-reagentRefFn this)))))
 
 (defn input-unmount [^clj this]
